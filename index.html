@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Food Craft - Roblox Mini</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Segoe UI', Arial; 
+            background: linear-gradient(45deg, #ff9a9e 0%, #fecfef 50%, #fecfef 100%); 
+            min-height: 100vh; 
+            padding: 10px;
+        }
+        .header { 
+            position: fixed; top: 10px; right: 10px; left: 10px; 
+            background: rgba(255,255,255,0.95); 
+            padding: 15px; border-radius: 20px; 
+            font-size: 20px; font-weight: bold; 
+            display: flex; justify-content: space-between; align-items: center;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+        .tabs { 
+            display: flex; gap: 10px; margin: 80px 10px 20px; 
+            flex-wrap: wrap;
+        }
+        button { 
+            background: linear-gradient(45deg, #4CAF50, #45a049); 
+            color: white; border: none; 
+            padding: 15px 25px; border-radius: 12px; 
+            cursor: pointer; font-size: 16px; font-weight: 600;
+            transition: all 0.3s; box-shadow: 0 4px 15px rgba(76,175,80,0.3);
+        }
+        button:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(76,175,80,0.4); }
+        button:disabled { background: #ccc; cursor: not-allowed; transform: none; }
+        .tab { display: none; padding: 20px; }
+        .tab.active { display: block; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 15px; }
+        .item { 
+            background: rgba(255,255,255,0.95); border-radius: 16px; 
+            padding: 20px 10px; text-align: center; 
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+            transition: all 0.3s; cursor: pointer;
+        }
+        .item:hover { transform: translateY(-5px) scale(1.02); box-shadow: 0 12px 35px rgba(0,0,0,0.2); }
+        .price { color: #4CAF50; font-weight: bold; font-size: 18px; }
+        .count { color: #2196F3; font-weight: bold; font-size: 20px; }
+        .craft-area { 
+            background: rgba(255,255,255,0.9); 
+            padding: 25px; border-radius: 20px; margin: 20px 0; 
+            text-align: center; font-size: 18px;
+        }
+        #username { 
+            position: fixed; bottom: 20px; left: 20px; 
+            padding: 15px; border-radius: 12px; border: 2px solid #ddd; 
+            font-size: 16px; width: 250px;
+        }
+        .locked { opacity: 0.5; background: #f0f0f0; position: relative; }
+        .locked::after { content: "🔒"; font-size: 24px; display: block; }
+        .empty { font-style: italic; color: #666; text-align: center; grid-column: 1/-1; padding: 40px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <span>🍳 Food Craft</span>
+        <span id="coins">💰 <span id="coin-count">100</span> | Ур. <span id="level-count">1</span></span>
+    </div>
+
+    <div class="tabs">
+        <button onclick="switchTab('inventory')">🎒 Инвентарь</button>
+        <button onclick="switchTab('shop')">🛒 Магазин</button>
+        <button onclick="switchTab('craft')">🔨 Крафт</button>
+        <button onclick="switchTab('achievements')">🏆 Достижения</button>
+        <button onclick="sellAll()">💵 Продать</button>
+    </div>
+
+    <div id="inventory" class="tab active">
+        <h2>🎒 Инвентарь</h2>
+        <div id="inv-grid" class="grid"></div>
+    </div>
+
+    <div id="shop" class="tab">
+        <h2>🛒 Магазин (<span id="shop-timer">30:00</span>)</h2>
+        <div id="shop-grid" class="grid"></div>
+    </div>
+
+    <div id="craft" class="tab">
+        <h2>🔨 Крафт еды</h2>
+        <div id="craft-grid" class="grid"></div>
+    </div>
+
+    <div id="achievements" class="tab">
+        <h2>🏆 Готовая еда (для продажи)</h2>
+        <div id="ach-grid" class="grid"></div>
+    </div>
+
+    <input type="text" id="username" placeholder="Введи ник..." value="Player">
+    <button onclick="initUser()" style="position:fixed; bottom:20px; left:290px;">🚀 Начать игру</button>
+
+    <script>
+        // 🔥 ТВОИ КЛЮЧИ
+        const SUPABASE_URL = 'https://bsyjspftsbwkuwtbsgkh.supabase.co';
+        const SUPABASE_KEY = 'sb_publishable_M2O4QM71Y2fZfyJuKJ-Jaw_NQsFZn9R';
+        const supabase = Supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        // ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ (один раз!)
+        let userId, inventory = {}, shopItems = [], recipes = [], ingredients = [];
+        let unlockedIngredients = [], unlockedRecipes = [], userLevel = 1, userCoins = 100;
+        let shopRefresh = Date.now() + 30 * 60 * 1000;
+
+        async function initUser() {
+            const username = document.getElementById('username').value || 'Player';
+            
+            // Создать/найти юзера
+            let { data, error } = await supabase.from('users').select('id').eq('username', username).single();
+            if (!data) {
+                ({ data } = await supabase.from('users').insert({ username }).select().single());
+            }
+            userId = data.id;
+            
+            // СБРОС НОВИЧКА
+            inventory = {};
+            await supabase.from('inventory').upsert({ id: userId, data: {} });
+            await supabase.from('user_progress').upsert({ 
+                id: userId, 
+                unlocked_ingredients: [1],
+                unlocked_recipes: [],
+                total_sold: 0 
+            });
+            
+            await loadData();
+            updateShopTimer();
+            renderAll();
+            
+            // Спрятать ввод ника
+            document.getElementById('username').style.display = 'none';
+            document.querySelector('button[onclick="initUser()"]').style.display = 'none';
+        }
+
+        async function loadData() {
+            const { data: userData } = await supabase.from('users').select('coins, level').eq('id', userId).single();
+            userCoins = userData?.coins || 100;
+            userLevel = userData?.level || 1;
+            
+            const { data: invData } = await supabase.from('inventory').select('data').eq('id', userId).single();
+            inventory = invData?.data || {};
+            
+            const { data: ingData } = await supabase.from('ingredients').select('*');
+            ingredients = ingData || [];
+            
+            const { data: recData } = await supabase.from('recipes').select('*');
+            recipes = recData || [];
+            
+            const { data: progData } = await supabase.from('user_progress').select('*').eq('id', userId).single();
+            unlockedIngredients = progData?.unlocked_ingredients || [1];
+            unlockedRecipes = progData?.unlocked_recipes || [];
+            
+            document.getElementById('coin-count').textContent = userCoins;
+            document.getElementById('level-count').textContent = userLevel;
+        }
+
+        async function saveInventory() {
+            await supabase.from('inventory').upsert({ id: userId, data: inventory });
+        }
+
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.getElementById(tab).classList.add('active');
+            if (tab === 'shop') updateShop();
+            if (tab === 'craft') renderCraft();
+        }
+
+        function renderInventory() {
+            const grid = document.getElementById('inv-grid');
+            grid.innerHTML = '';
+            
+            let hasItems = false;
+            ingredients.forEach(ing => {
+                const count = inventory[ing.id] || 0;
+                if (count > 0 && unlockedIngredients.includes(ing.id)) {
+                    hasItems = true;
+                    const div = document.createElement('div');
+                    div.className = 'item';
+                    div.innerHTML = `${ing.emoji}<br><small>${ing.name}</small><br><span class="count">×${count}</span>`;
+                    grid.appendChild(div);
+                }
+            });
+            
+            if (!hasItems) {
+                grid.innerHTML = '<div class="empty">Инвентарь пуст! Купи в магазине 🌾</div>';
+            }
+        }
+
+        async function updateShop() {
+            const availableIngs = ingredients.filter(ing => unlockedIngredients.includes(ing.id));
+            shopItems = availableIngs.map(ing => ({
+                ...ing,
+                qty: Math.floor(Math.random() * 3) + 1
+            }));
+            
+            const grid = document.getElementById('shop-grid');
+            grid.innerHTML = '';
+            shopItems.forEach(item => {
+                const totalPrice = item.price * item.qty;
+                const div = document.createElement('div');
+                div.className = 'item';
+                div.innerHTML = `
+                    ${item.emoji}<br><small>${item.name}</small><br>
+                    ×${item.qty} за <span class="price">$${totalPrice}</span><br>
+                    <button onclick="buyItem(${item.id}, ${item.qty}, ${totalPrice})" 
+                            ${userCoins < totalPrice ? 'disabled' : ''}>
+                        ${userCoins < totalPrice ? 'Нет 💰' : 'Купить'}
+                    </button>
+                `;
+                grid.appendChild(div);
+            });
+            updateShopTimer();
+        }
+
+        function updateShopTimer() {
+            const diff = Math.max(0, shopRefresh - Date.now());
+            const min = Math.floor(diff / 60000);
+            const sec = Math.floor((diff % 60000) / 1000);
+            document.getElementById('shop-timer').textContent = `${min}:${sec.toString().padStart(2, '0')}`;
+            setTimeout(updateShopTimer, 1000);
+        }
+
+        async function buyItem(ingId, qty, totalPrice) {
+            if (userCoins < totalPrice) return alert('❌ Недостаточно монет!');
+            
+            await supabase.from('users').update({ coins: userCoins - totalPrice }).eq('id', userId);
+            inventory[ingId] = (inventory[ingId] || 0) + qty;
+            await saveInventory();
+            
+            await loadData();
+            renderInventory();
+            updateShop();
+        }
+
+        async function tryCraft(recipeId) {
+            const recipe = recipes.find(r => r.id === recipeId);
+            if (!recipe) return;
+            
+            if (recipe.req_level > userLevel) return alert(`🔒 Нужен уровень ${recipe.req_level}!`);
+            
+            const ingAvailable = recipe.ingredients.every(ing => unlockedIngredients.includes(ing.id));
+            if (!ingAvailable) return alert('🔒 Ингредиент ещё не открыт!');
+            
+            let canCraft = true;
+            recipe.ingredients.forEach(ing => {
+                const have = inventory[ing.id] || 0;
+                if (have < ing.count) canCraft = false;
+            });
+            if (!canCraft) return alert('❌ Недостаточно ингредиентов!');
+            
+            // КРАФТ
+            recipe.ingredients.forEach(ing => {
+                inventory[ing.id] = (inventory[ing.id] || 0) - ing.count;
+            });
+            await saveInventory();
+            
+            // Шанс нового ингредиента
+            if (Math.random() < 0.3 && unlockedIngredients.length < ingredients.length) {
+                const newIngId = ingredients[Math.floor(Math.random() * ingredients.length)].id;
+                if (!unlockedIngredients.includes(newIngId)) {
+                    unlockedIngredients.push(newIngId);
+                    await supabase.from('user_progress').upsert({ 
+                        id: userId, unlocked_ingredients: unlockedIngredients 
+                    });
+                    alert(`✨ Новый: ${ingredients.find(i => i.id === newIngId)?.name}!`);
+                }
+            }
+            
+            if (!unlockedRecipes.includes(recipe.id)) {
+                unlockedRecipes.push(recipe.id);
+                await supabase.from('user_progress').upsert({ 
+                    id: userId, unlocked_recipes: unlockedRecipes 
+                });
+            }
+            
+            alert(`✅ ${recipe.emoji} ${recipe.name}!`);
+            await loadData();
+            renderAll();
+        }
+
+        async function sellAll() {
+            if (unlockedRecipes.length === 0) return alert('❌ Нет еды для продажи!');
+            
+            let totalSell = 0;
+            unlockedRecipes.forEach(rid => {
+                const recipe = recipes.find(r => r.id === rid);
+                totalSell += recipe ? recipe.price : 0;
+            });
+            
+            await supabase.from('users').update({ coins: userCoins + totalSell }).eq('id', userId);
+            
+            const newLevel = 1 + Math.floor(unlockedRecipes.length / 3);
+            await supabase.from('users').update({ level: newLevel }).eq('id', userId);
+            await supabase.from('user_progress').update({ 
+                id: userId, unlocked_recipes: [], total_sold: unlockedRecipes.length * 20 
+            });
+            
+            alert(`💰 +${totalSell} монет! Ур. ${newLevel}`);
+            await loadData();
+            renderAll();
+        }
+
+        function renderCraft() {
+            const grid = document.getElementById('craft-grid');
+            grid.innerHTML = '';
+            
+            recipes.forEach(recipe => {
+                const levelOk = recipe.req_level <= userLevel;
+                const ingOk = recipe.ingredients.every(ing => unlockedIngredients.includes(ing.id));
+                const available = unlockedRecipes.includes(recipe.id) || recipe.unlocked_by_default;
+                
+                const div = document.createElement('div');
+                div.className = `item ${!levelOk || !ingOk || !available ? 'locked' : ''}`;
+                div.innerHTML = `
+                    ${recipe.emoji}<br><small>${recipe.name}</small><br>
+                    Ур.${recipe.req_level}<br>
+                    ${levelOk && ingOk && available ? 
+                        `<button onclick="tryCraft(${recipe.id})">Крафтить</button>` : 
+                        'Заблокировано'
+                    }
+                `;
+                grid.appendChild(div);
+            });
+        }
+
+        function renderAchievements() {
+            const grid = document.getElementById('ach-grid');
+            grid.innerHTML = '';
+            
+            if (unlockedRecipes.length === 0) {
+                grid.innerHTML = '<div class="empty">Скрафти еду для продажи!</div>';
+                return;
+            }
+            
+            unlockedRecipes.forEach(rid => {
+                const recipe = recipes.find(r => r.id === rid);
+                if (recipe) {
+                    const div = document.createElement('div');
+                    div.className = 'item';
+                    div.innerHTML = `${recipe.emoji} ${recipe.name}`;
+                    grid.appendChild(div);
+                }
+            });
+        }
+
+        function renderAll() {
+            renderInventory();
+            renderCraft();
+            renderAchievements();
+        }
+
+        // ГЛОБАЛЬНЫЕ ФУНКЦИИ
+        window.initUser = initUser;
+        window.switchTab = switchTab;
+        window.buyItem = buyItem;
+        window.tryCraft = tryCraft;
+        window.sellAll = sellAll;
+        window.renderAll = renderAll;
+        window.updateShop = updateShop;
+    </script>
+</body>
+</html>
